@@ -1,18 +1,28 @@
 const std = @import("std");
-const Base64 = @import("base64.zig");
+const base64 = @import("base64.zig");
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    // Allocator business
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = gpa.allocator();
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
+    // Grab stdout
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    // Actually do things
+    const testValue = "Testing some more stuff";
+    const encodedValue = try base64.Base64.encode(allocator, testValue);
+    defer allocator.free(encodedValue);
+
+    const decodedValue = try base64.Base64.decode(allocator, encodedValue);
+    defer allocator.free(decodedValue);
+
+    try stdout.print(
+        "Base String {s}\nEncoded String {s}\nDecoded String {s}\n",
+        .{ testValue, encodedValue, decodedValue },
+    );
 
     try bw.flush(); // Don't forget to flush!
 }
