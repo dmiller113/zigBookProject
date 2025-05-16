@@ -90,7 +90,8 @@ pub const Base64 = struct {
             for (destination, 0..) |byte, i| {
                 if (i != 0) window <<= 8;
 
-                window |= byte;
+                // Don't use prior read bytes
+                if (i < bytesRead) window |= byte;
 
                 // Capture Padding
                 missingBytes = @max(3 - bytesRead, 0);
@@ -164,7 +165,7 @@ test "encoding large string" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     const testBytes = "foobar the great";
-    const expected = "Zm9vYmFyIHRoZSBncmVhdG==";
+    const expected = "Zm9vYmFyIHRoZSBncmVhdA==";
 
     const output = try Base64.encode(allocator, testBytes);
     defer allocator.free(output);
@@ -246,6 +247,19 @@ test "Reversibility of string" {
     defer allocator.free(decoded);
 
     try std.testing.expectEqualStrings(testBytes, decoded);
+}
+
+test "Padding" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const expected = "QzNWwQ==";
+    const testBytes = &[_]u8{ 0x43, 0x33, 0x56, 0xc1 };
+
+    const encoded = try Base64.encode(allocator, testBytes);
+    defer allocator.free(encoded);
+
+    try std.testing.expectEqualStrings(expected, encoded);
 }
 
 // 1000 0000 0000 0000 0
