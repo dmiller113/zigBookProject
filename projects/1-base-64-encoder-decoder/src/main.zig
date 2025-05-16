@@ -1,5 +1,5 @@
 const std = @import("std");
-const base64 = @import("base64.zig");
+const Base64 = @import("base64.zig");
 
 pub fn main() !void {
     // Allocator business
@@ -13,10 +13,10 @@ pub fn main() !void {
 
     // Actually do things
     const testValue = "Testing some more stuff";
-    const encodedValue = try base64.Base64.encode(allocator, testValue);
+    const encodedValue = try Base64.encode(allocator, testValue);
     defer allocator.free(encodedValue);
 
-    const decodedValue = try base64.Base64.decode(allocator, encodedValue);
+    const decodedValue = try Base64.decode(allocator, encodedValue);
     defer allocator.free(decodedValue);
 
     try stdout.print(

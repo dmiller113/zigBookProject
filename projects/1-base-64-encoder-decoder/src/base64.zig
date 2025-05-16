@@ -20,103 +20,101 @@ const base64DecodeMap = std.StaticStringMap(usize).initComptime(
     },
 );
 
-pub const Base64 = struct {
-    fn outputU6Amount(bytes: []const u8) !usize {
-        return (try std.math.divCeil(usize, bytes.len, 3)) * 4;
+fn outputU6Amount(bytes: []const u8) !usize {
+    return (try std.math.divCeil(usize, bytes.len, 3)) * 4;
+}
+
+pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+    // could waste up to 2 values due to = packing
+    const baseNumSets: usize = (try std.math.divFloor(usize, bytes.len, 4) * 3);
+    const baseOutput: []u8 = try allocator.alloc(u8, baseNumSets);
+    defer allocator.free(baseOutput);
+
+    // Grab the packets
+    var destination = [_]u8{ 0, 0, 0, 0 };
+    var stream = std.io.fixedBufferStream(bytes);
+    var paddingRead: usize = 0;
+
+    // Needed because we need to skip the while if an empty read;
+    var head: usize = 0;
+    var bytesRead: usize = try stream.read(&destination);
+    while (bytesRead != 0) : (bytesRead = try stream.read(&destination)) {
+
+        // Move buffer into 24 bit window
+        var window: u24 = 0;
+        for (destination, 0..) |byte, i| {
+            if (i != 0) window <<= 6;
+            // Ignore padding
+            if (byte == nullValue) {
+                paddingRead += 1;
+                continue;
+            }
+
+            const decodedByte = std.math.lossyCast(u6, base64DecodeMap.get(&[1]u8{byte}).?);
+            window |= decodedByte;
+        }
+
+        // Divide the window into 3 u8 bytes
+        var windowIndex: usize = 3;
+        while (windowIndex > 0) {
+            windowIndex -= 1;
+            baseOutput[head + (2 - windowIndex)] = std.math.lossyCast(u8, (window >> std.math.lossyCast(u5, 8 * windowIndex)) & 0b11111111);
+        }
+
+        head += 3;
     }
 
-    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
-        // could waste up to 2 values due to = packing
-        const baseNumSets: usize = (try std.math.divFloor(usize, bytes.len, 4) * 3);
-        const baseOutput: []u8 = try allocator.alloc(u8, baseNumSets);
-        defer allocator.free(baseOutput);
-
-        // Grab the packets
-        var destination = [_]u8{ 0, 0, 0, 0 };
-        var stream = std.io.fixedBufferStream(bytes);
-        var paddingRead: usize = 0;
-
-        // Needed because we need to skip the while if an empty read;
-        var head: usize = 0;
-        var bytesRead: usize = try stream.read(&destination);
-        while (bytesRead != 0) : (bytesRead = try stream.read(&destination)) {
-
-            // Move buffer into 24 bit window
-            var window: u24 = 0;
-            for (destination, 0..) |byte, i| {
-                if (i != 0) window <<= 6;
-                // Ignore padding
-                if (byte == nullValue) {
-                    paddingRead += 1;
-                    continue;
-                }
-
-                const decodedByte = std.math.lossyCast(u6, base64DecodeMap.get(&[1]u8{byte}).?);
-                window |= decodedByte;
-            }
-
-            // Divide the window into 3 u8 bytes
-            var windowIndex: usize = 3;
-            while (windowIndex > 0) {
-                windowIndex -= 1;
-                baseOutput[head + (2 - windowIndex)] = std.math.lossyCast(u8, (window >> std.math.lossyCast(u5, 8 * windowIndex)) & 0b11111111);
-            }
-
-            head += 3;
-        }
-
-        // TODO: Find way to avoid this
-        const output = try allocator.alloc(u8, baseNumSets - paddingRead);
-        for (output, 0..) |_, i| {
-            output[i] = baseOutput[i];
-        }
-
-        return output;
+    // TODO: Find way to avoid this
+    const output = try allocator.alloc(u8, baseNumSets - paddingRead);
+    for (output, 0..) |_, i| {
+        output[i] = baseOutput[i];
     }
 
-    pub fn encode(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
-        const numSets: usize = try Base64.outputU6Amount(bytes);
-        const output: []u8 = try allocator.alloc(u8, numSets);
+    return output;
+}
 
-        // Grab the packets
-        var destination = [_]u8{ 0, 0, 0 };
-        var stream = std.io.fixedBufferStream(bytes);
+pub fn encode(allocator: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+    const numSets: usize = try outputU6Amount(bytes);
+    const output: []u8 = try allocator.alloc(u8, numSets);
 
-        var head: usize = 0;
-        var bytesRead = try stream.read(&destination);
-        var missingBytes: usize = 0;
-        while (bytesRead != 0) : (bytesRead = try stream.read(&destination)) {
-            var window: u24 = 0;
-            for (destination, 0..) |byte, i| {
-                if (i != 0) window <<= 8;
+    // Grab the packets
+    var destination = [_]u8{ 0, 0, 0 };
+    var stream = std.io.fixedBufferStream(bytes);
 
-                // Don't use prior read bytes
-                if (i < bytesRead) window |= byte;
+    var head: usize = 0;
+    var bytesRead = try stream.read(&destination);
+    var missingBytes: usize = 0;
+    while (bytesRead != 0) : (bytesRead = try stream.read(&destination)) {
+        var window: u24 = 0;
+        for (destination, 0..) |byte, i| {
+            if (i != 0) window <<= 8;
 
-                // Capture Padding
-                missingBytes = @max(3 - bytesRead, 0);
-            }
+            // Don't use prior read bytes
+            if (i < bytesRead) window |= byte;
 
-            var windowIndex: usize = 4;
-            while (windowIndex > 0) {
-                windowIndex -= 1;
-                const bitsToEncode: u6 = std.math.lossyCast(u6, (window >> std.math.lossyCast(u5, windowIndex * 6)) & 0b111111);
-
-                output[head + (3 - windowIndex)] = base64Table[bitsToEncode];
-            }
-
-            head += 4;
+            // Capture Padding
+            missingBytes = @max(3 - bytesRead, 0);
         }
 
-        // Handle padding
-        var outputIndex: usize = output.len - missingBytes;
-        while (outputIndex < output.len) : (outputIndex += 1) {
-            output[outputIndex] = nullValue;
+        var windowIndex: usize = 4;
+        while (windowIndex > 0) {
+            windowIndex -= 1;
+            const bitsToEncode: u6 = std.math.lossyCast(u6, (window >> std.math.lossyCast(u5, windowIndex * 6)) & 0b111111);
+
+            output[head + (3 - windowIndex)] = base64Table[bitsToEncode];
         }
 
-        return output;
+        head += 4;
     }
-};
+
+    // Handle padding
+    var outputIndex: usize = output.len - missingBytes;
+    while (outputIndex < output.len) : (outputIndex += 1) {
+        output[outputIndex] = nullValue;
+    }
+
+    return output;
+}
 
 // test "output sizing" {
 //    const bytes = "fo";
@@ -131,7 +129,7 @@ test "encoding single pack no padding" {
     const allocator = gpa.allocator();
     const testBytes = [3]u8{ 0xFF, 0xFF, 0xFF };
     const expected = "////";
-    const output = try Base64.encode(allocator, &testBytes);
+    const output = try encode(allocator, &testBytes);
     defer allocator.free(output);
 
     try std.testing.expectEqualStrings(expected, output);
@@ -144,7 +142,7 @@ test "encoding single pack with padding" {
     // 0000 0001 XXXX XXXX XXXX XXXX
     // 000000 01XXXX XXXXXX XXXXXX
     const expected = "AQ==";
-    const output = try Base64.encode(allocator, &testBytes);
+    const output = try encode(allocator, &testBytes);
     defer allocator.free(output);
 
     try std.testing.expectEqualStrings(expected, output);
@@ -155,7 +153,7 @@ test "encoding multiple packs" {
     const allocator = gpa.allocator();
     const testBytes = "Hi";
     const expected = "SGk=";
-    const output = try Base64.encode(allocator, testBytes);
+    const output = try encode(allocator, testBytes);
     defer allocator.free(output);
 
     try std.testing.expectEqualStrings(expected, output);
@@ -167,7 +165,7 @@ test "encoding large string" {
     const testBytes = "foobar the great";
     const expected = "Zm9vYmFyIHRoZSBncmVhdA==";
 
-    const output = try Base64.encode(allocator, testBytes);
+    const output = try encode(allocator, testBytes);
     defer allocator.free(output);
 
     try std.testing.expectEqualStrings(expected, output);
@@ -179,7 +177,7 @@ test "encoding empty string" {
     const testBytes = "";
     const expected = "";
 
-    const output = try Base64.encode(allocator, testBytes);
+    const output = try encode(allocator, testBytes);
     defer allocator.free(output);
 
     try std.testing.expectEqualStrings(expected, output);
@@ -191,7 +189,7 @@ test "decode empty string" {
     const testBytes = "";
     const expected = "";
 
-    const output = try Base64.decode(allocator, testBytes);
+    const output = try decode(allocator, testBytes);
     defer allocator.free(output);
 
     try std.testing.expectEqualStrings(expected, output);
@@ -203,7 +201,7 @@ test "decode simple encoding" {
     const testBytes = "AQ==";
     const expected = &[1]u8{0x01};
 
-    const output = try Base64.decode(allocator, testBytes);
+    const output = try decode(allocator, testBytes);
     defer allocator.free(output);
 
     try std.testing.expectEqualStrings(expected, output);
@@ -226,10 +224,10 @@ test "Reversibility single byte" {
     const allocator = gpa.allocator();
     const testBytes = &[1]u8{0x01};
 
-    const encoded = try Base64.encode(allocator, testBytes);
+    const encoded = try encode(allocator, testBytes);
     defer allocator.free(encoded);
 
-    const decoded = try Base64.decode(allocator, encoded);
+    const decoded = try decode(allocator, encoded);
     defer allocator.free(decoded);
 
     try std.testing.expectEqualStrings(testBytes, decoded);
@@ -240,10 +238,10 @@ test "Reversibility of string" {
     const allocator = gpa.allocator();
     const testBytes = "foobar the great";
 
-    const encoded = try Base64.encode(allocator, testBytes);
+    const encoded = try encode(allocator, testBytes);
     defer allocator.free(encoded);
 
-    const decoded = try Base64.decode(allocator, encoded);
+    const decoded = try decode(allocator, encoded);
     defer allocator.free(decoded);
 
     try std.testing.expectEqualStrings(testBytes, decoded);
@@ -256,7 +254,7 @@ test "Padding" {
     const expected = "QzNWwQ==";
     const testBytes = &[_]u8{ 0x43, 0x33, 0x56, 0xc1 };
 
-    const encoded = try Base64.encode(allocator, testBytes);
+    const encoded = try encode(allocator, testBytes);
     defer allocator.free(encoded);
 
     try std.testing.expectEqualStrings(expected, encoded);
