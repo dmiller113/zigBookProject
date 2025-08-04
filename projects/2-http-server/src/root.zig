@@ -89,8 +89,102 @@ const HttpServer = struct {
     }
 };
 
+pub const Request = struct {
+    method: Method = Method.GET,
+    headers: []Header = &[_]Header{},
+    uri: []const u8 = "",
+    version: struct {
+        major: u8,
+        minor: u8,
+    },
+
+    pub fn fromStream(alloc: mem.Allocator, stream: *net.Stream) !void {
+        const raw_stream_reader = stream.reader();
+        var buffered_stream_reader = std.io.bufferedReader(raw_stream_reader);
+        var reader = buffered_stream_reader.reader();
+
+        // Parse start-line
+        var startline = std.ArrayList(u8).init(alloc);
+        const startline_writer = startline.writer();
+
+        // Method
+        try reader.streamUntilDelimiter(startline_writer, ' ', null);
+
+        if (!Request.Method.isValidMethod(startline.items)) {
+            return Errors.InvalidRequestMethod;
+        }
+
+        const http_method = startline.items[0..];
+        std.debug.print("Method: {s}\n", .{http_method});
+        startline.clearRetainingCapacity();
+
+        // Version
+        try reader.streamUntilDelimiter(startline_writer, ' ', null);
+        startline.clearRetainingCapacity();
+
+        // URI
+        try reader.streamUntilDelimiter(startline_writer, '\n', null);
+        std.debug.print("Method: {s}, Raw URI: {s}\n", .{ http_method, startline.items });
+
+        startline.clearRetainingCapacity();
+    }
+
+    pub const Header = struct {
+        name: []const u8,
+        value: Value,
+
+        pub const Value = union(enum) {
+            // Raw bytes
+            any: []const u8,
+            integer: u64,
+            real: f64,
+        };
+    };
+
+    pub const Errors = error{
+        InvalidRequestMethod,
+    };
+
+    pub const Method = enum {
+        CONNECT,
+        DELETE,
+        GET,
+        HEAD,
+        OPTIONS,
+        POST,
+        PUT,
+        TRACE,
+
+        const method_string_lookup = std.StaticStringMap(bool).initComptime(
+            blk: {
+                const method_type_info = @typeInfo(Method);
+                const fields = method_type_info.@"enum".fields;
+
+                var temp: [fields.len]struct { []const u8, bool } = undefined;
+
+                for (fields, 0..) |enumfield, i| {
+                    temp[i] = .{ enumfield.name, true };
+                }
+
+                // Deal with comptime + global issue
+                const output = temp;
+                break :blk &output;
+            },
+        );
+
+        fn isValidMethod(possible_method: []const u8) bool {
+            return method_string_lookup.has(possible_method);
+        }
+    };
+};
+
+// const Response = struct {
+// };
+
 const std = @import("std");
 const fmt = std.fmt;
+const io = std.io;
+const mem = std.mem;
 const net = std.net;
 const posix = std.posix;
 // const testing = std.testing;
